@@ -6,15 +6,13 @@
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
-#include <tuple>   // 用于 composite key
 
-#include "multimap.h"  // 引入 multimap 头文件
+#include "multimap.h"  // include multimap header
 
-// 定义 composite key: (虚拟运行时间, 上次运行时刻, 任务 id)
-// 加入任务 id 作为 tie-breaking 的依据
-typedef std::tuple<unsigned int, unsigned int, char> Key;
+// Define a composite key: (virtual runtime, last run tick)
+typedef std::pair<unsigned int, unsigned int> Key;
 
-// 表示任务的类
+// Class representing a task.
 class Task {
  public:
   Task(char id, unsigned int start_time, unsigned int duration)
@@ -24,24 +22,24 @@ class Task {
         v_runtime(0),
         last_run_tick(0) {}
 
-  char id;                     // 任务标识符
-  unsigned int start_time;     // 任务开始的时刻（tick）
-  unsigned int remaining_duration;  // 剩余运行时长（tick）
-  unsigned int v_runtime;      // 任务的虚拟运行时间
-  unsigned int last_run_tick;  // 上次运行时刻（用于 tie-breaking）
+  char id;                     // task identifier
+  unsigned int start_time;     // tick at which task should start
+  unsigned int remaining_duration;  // ticks remaining for completion
+  unsigned int v_runtime;      // virtual runtime of the task
+  unsigned int last_run_tick;  // tick at which task last ran
 };
 
-// 表示完全公平调度器（CFS）的类
+// Class representing the Completely Fair Scheduler (CFS).
 class Scheduler {
  public:
-  // 添加新任务到调度器
+  // Adds a new task to the scheduler.
   void AddTask(char id, unsigned int start_time, unsigned int duration) {
     all_tasks.push_back(std::unique_ptr<Task>(new Task(id, start_time, duration)));
     Task* raw_ptr = all_tasks.back().get();
     pending_tasks.push(raw_ptr);
   }
 
-  // 运行调度循环，直到没有任务
+  // Runs the scheduling loop until no tasks remain.
   void Run() {
     while (!pending_tasks.empty() || timeline.Size() != 0 || current_task != nullptr) {
       ProcessTick();
@@ -49,7 +47,7 @@ class Scheduler {
   }
 
  private:
-  // 用于待启动任务的比较器：先比较开始时间；相同则比较任务 id（保证稳定性）
+  // Comparator for pending tasks based on start time; if equal, order by task id.
   struct PendingComparator {
     bool operator()(const Task* a, const Task* b) const {
       if (a->start_time != b->start_time)
@@ -59,76 +57,90 @@ class Scheduler {
     }
   };
 
-  std::priority_queue<Task*, std::vector<Task*>, PendingComparator> pending_tasks;
-  // 使用 composite key 来存储任务以实现 tie-breaking
+  std::priority_queue<Task*, std::vector<Task*>, PendingComparator> pending_tasks;  
+  // Timeline: use the composite key to allow tie-breaking.
   Multimap<Key, Task*> timeline;
-  Task* current_task = nullptr;         // 当前正在运行的任务
-  unsigned int min_v_runtime = 0;         // 全局最小虚拟运行时间
-  unsigned int current_tick = 0;          // 当前 tick 计数器
-  std::vector<std::unique_ptr<Task>> all_tasks;  // 保存所有任务的存储容器
+  Task* current_task = nullptr;      // currently running task
+  unsigned int min_v_runtime = 0;      // global minimum virtual runtime
+  unsigned int current_tick = 0;       // current tick counter
+  std::vector<std::unique_ptr<Task>> all_tasks;  // storage for tasks
 
-  // 用于切换任务后延迟抢占的标志
+  // Flag to delay preemption immediately after a switch.
   bool just_switched = false;
 
-  // 构造任务的 composite key
+  // Helper: constructs the composite key for a task.
   Key makeKey(Task* t) {
-    return std::make_tuple(t->v_runtime, t->last_run_tick, t->id);
+    return std::make_pair(t->v_runtime, t->last_run_tick);
   }
 
-  // 处理一个 tick 的调度
+  // Helper: returns an “adjusted” key from the minimum in the timeline.
+  Key adjustedMinKey(const Key& k) {
+    return std::make_pair(k.first + 1, k.second);
+  }
+
+  // Processes one tick of scheduling.
   void ProcessTick() {
     bool new_task_inserted = false;
 
-    // 1. 插入所有在当前 tick 到达的任务
+    // 1. Insert new tasks whose start time equals current_tick.
     while (!pending_tasks.empty() &&
            pending_tasks.top()->start_time == current_tick) {
       Task* t = pending_tasks.top();
       pending_tasks.pop();
-      // 初始化任务的虚拟运行时间为全局最小值
+      // Initialize its virtual runtime to the global minimum.
       t->v_runtime = min_v_runtime;
       timeline.Insert(makeKey(t), t);
       new_task_inserted = true;
     }
 
-    // 2. 抢占检查：如果当前任务存在且 timeline 非空，
-    //    当当前任务的 composite key大于 timeline 中最小 key 时，抢占当前任务
+    // 2. Preemption check:
+    // If a task is running and the timeline is not empty, then:
+    // • If new tasks were inserted, preempt if current task’s key is greater than the minimum.
+    // • Otherwise, require an extra tick (i.e. current key > adjusted minimum) before preempting.
     if (current_task != nullptr && timeline.Size() != 0) {
       Key current_key = makeKey(current_task);
       Key min_key = timeline.Min();
-      if (current_key > min_key) {
-        timeline.Insert(current_key, current_task);
-        current_task = nullptr;
+      if (new_task_inserted) {
+        if (current_key > min_key) {
+          timeline.Insert(current_key, current_task);
+          current_task = nullptr;
+        }
+      } else {
+        if (current_key > adjustedMinKey(min_key)) {
+          timeline.Insert(current_key, current_task);
+          current_task = nullptr;
+        }
       }
     }
 
-    // 3. 如果当前没有任务，则从 timeline 中选择下一个任务
+    // 3. If no current task, select the next one from the timeline.
     if (current_task == nullptr && timeline.Size() != 0) {
       Key min_key = timeline.Min();
       current_task = timeline.Get(min_key);
       timeline.Remove(min_key);
-      // 更新全局最小虚拟运行时间
+      // Update global minimum to the selected task’s virtual runtime.
       min_v_runtime = current_task->v_runtime;
       just_switched = true;
     }
 
-    // 4. 运行当前任务一个 tick
+    // 4. Run the current task for one tick.
     bool finished = false;
     if (current_task != nullptr) {
       current_task->remaining_duration--;
-      current_task->v_runtime++;  // 虚拟运行时间递增
+      current_task->v_runtime++;  // increment virtual runtime
       finished = (current_task->remaining_duration == 0);
-      // 更新上次运行 tick
+      // Update last run tick (used for tie-breaking).
       current_task->last_run_tick = current_tick;
     }
 
-    // 5. 输出当前 tick 的状态
+    // 5. Output the current tick’s status.
     unsigned int active_count = timeline.Size() + (current_task ? 1 : 0);
     std::cout << current_tick << " [" << active_count << "]: ";
     if (current_task != nullptr) {
       std::cout << current_task->id;
       if (finished) {
         std::cout << "*";
-        // 完成任务后，从存储中移除该任务
+        // Remove finished task from storage.
         auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
                                [this](const std::unique_ptr<Task>& ptr) {
                                  return ptr.get() == current_task;
@@ -145,7 +157,7 @@ class Scheduler {
     if (just_switched)
       just_switched = false;
 
-    // 6. tick 计数器自增
+    // 6. Increment the tick counter.
     current_tick++;
   }
 };
