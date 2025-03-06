@@ -30,16 +30,16 @@ class Task {
 // Class representing the Completely Fair Scheduler (CFS)
 class Scheduler {
  public:
-  // Adds a new task to the scheduler, creates a new Task object,
-  // stores its pointer in all_tasks and adds it to the pending queue
+  // Adds a new task to the scheduler: creates a new Task object,
+  // stores its pointer in all_tasks and adds it to the pending queue.
   void AddTask(char id, unsigned int start_time, unsigned int duration) {
     all_tasks.push_back(
         std::unique_ptr<Task>(new Task(id, start_time, duration)));
-    Task* raw_ptr = all_tasks.back().get();  // get raw pointer
-    pending_tasks.push(raw_ptr);             // add task to pending queue
+    Task* raw_ptr = all_tasks.back().get();
+    pending_tasks.push(raw_ptr);
   }
 
-  // Runs the scheduling loop until no tasks remain pending or active
+  // Runs the scheduling loop until no tasks remain pending or active.
   void Run() {
     while (!pending_tasks.empty() || timeline.Size() != 0 ||
            current_task != nullptr) {
@@ -48,8 +48,8 @@ class Scheduler {
   }
 
  private:
-  // Comparator for pending tasks based on start time
-  // If start times are equal, order by task identifier
+  // Comparator for pending tasks based on start time.
+  // If start times are equal, order by task identifier.
   struct PendingComparator {
     bool operator()(const Task* a, const Task* b) const {
       if (a->start_time != b->start_time) {
@@ -61,77 +61,63 @@ class Scheduler {
   };
 
   std::priority_queue<Task*, std::vector<Task*>, PendingComparator>
-      pending_tasks;               // tasks waiting to be launched
-  Multimap<unsigned int, Task*> timeline;  // timeline for scheduling
-  Task* current_task = nullptr;  // task currently running
-  unsigned int min_v_runtime = 0;  // global minimum virtual runtime
-  unsigned int current_tick = 0;   // current tick counter
+      pending_tasks;                        // tasks waiting to be launched
+  Multimap<unsigned int, Task*> timeline;   // timeline for scheduling
+  Task* current_task = nullptr;             // currently running task
+  unsigned int min_v_runtime = 0;           // global minimum virtual runtime
+  unsigned int current_tick = 0;            // current tick counter
   std::vector<std::unique_ptr<Task>> all_tasks;  // storage for tasks
 
-  // Processes a single tick of the scheduler
+  // Processes a single tick of the scheduler.
   void ProcessTick() {
-    // Flag to indicate if one or more new tasks were inserted this tick.
-    bool newTaskInserted = false;
-
-    // 1. Insert new tasks whose start time equals current_tick
+    // 1. Insert any new tasks whose start time equals current_tick.
     while (!pending_tasks.empty() &&
            pending_tasks.top()->start_time == current_tick) {
-      Task* task = pending_tasks.top();  // get pending task
-      pending_tasks.pop();               // remove it from pending queue
-      // initialize its virtual runtime to current global value
-      task->v_runtime = min_v_runtime;
-      timeline.Insert(task->v_runtime, task);  // insert into timeline
-      newTaskInserted = true;
+      Task* task = pending_tasks.top();
+      pending_tasks.pop();
+      task->v_runtime = min_v_runtime;  // initialize v_runtime to current global min
+      timeline.Insert(task->v_runtime, task);
     }
 
     // 2. Preemption check:
-    // If a task is running and the timeline is not empty, then:
-    // • If new tasks were just inserted, preempt if current task’s virtual runtime is greater than the minimum in timeline.
-    // • Otherwise, require an extra tick difference (i.e. current v_runtime > timeline.Min() + 1) before preempting.
-    if (current_task != nullptr && timeline.Size() != 0) {
-      if (newTaskInserted) {
-        if (current_task->v_runtime > timeline.Min()) {
-          timeline.Insert(current_task->v_runtime, current_task);
-          current_task = nullptr;
-        }
-      } else {
-        if (current_task->v_runtime > timeline.Min() + 1) {
-          timeline.Insert(current_task->v_runtime, current_task);
-          current_task = nullptr;
-        }
-      }
+    // If a task is running and the timeline is not empty, and its virtual runtime
+    // is greater than the smallest in the timeline, then preempt it.
+    if (current_task != nullptr && timeline.Size() != 0 &&
+        current_task->v_runtime > timeline.Min()) {
+      timeline.Insert(current_task->v_runtime, current_task);
+      current_task = nullptr;
     }
 
-    // 3. If no current task is running, select the next task from timeline
+    // 3. If no current task is running, select the next task from the timeline.
     if (current_task == nullptr && timeline.Size() != 0) {
-      unsigned int min_key = timeline.Min();  // get smallest vruntime key
-      current_task = timeline.Get(min_key);    // select next task
-      timeline.Remove(min_key);                // remove it from timeline
-      min_v_runtime = current_task->v_runtime;   // update global min_vruntime
+      unsigned int min_key = timeline.Min();
+      current_task = timeline.Get(min_key);
+      timeline.Remove(min_key);
+      min_v_runtime = current_task->v_runtime;  // update global min_vruntime
     }
 
-    // 4. Run the current task for one tick
+    // 4. Run the current task for one tick.
     bool finished = false;
     if (current_task != nullptr) {
-      current_task->remaining_duration--;  // decrement duration
-      current_task->v_runtime++;             // increment virtual runtime
+      current_task->remaining_duration--;
+      current_task->v_runtime++;
       finished = (current_task->remaining_duration == 0);
-      // update last run tick for tie-breaking if needed
+      // Update last_run_tick (available for potential tie-breaking).
       current_task->last_run_tick = current_tick;
     }
 
-    // 5. Calculate number of active tasks (in timeline plus current task)
+    // 5. Calculate the number of active tasks.
     unsigned int active_count = timeline.Size() +
         (current_task != nullptr ? 1 : 0);
 
-    // 6. Output current tick status
-    // Format: <tick> [<#tasks>]: <task_id> with '*' if finished
+    // 6. Output the status for the current tick.
+    // Format: <tick> [<#tasks>]: <task_id> (followed by '*' if finished)
     std::cout << current_tick << " [" << active_count << "]: ";
     if (current_task != nullptr) {
       std::cout << current_task->id;
       if (finished) {
         std::cout << "*";
-        // After printing, remove the finished task from all_tasks
+        // Remove the finished task from all_tasks.
         auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
             [this](const std::unique_ptr<Task>& ptr) {
               return ptr.get() == current_task;
@@ -146,35 +132,34 @@ class Scheduler {
     }
     std::cout << std::endl;
 
-    // 7. Increment tick counter
+    // 7. Increment the tick counter.
     current_tick++;
   }
 };
 
 int main(int argc, char* argv[]) {
-  // Check for correct number of command-line arguments
+  // Check for correct number of command-line arguments.
   if (argc != 2) {
     std::cerr << "Usage: " << argv[0]
               << " <task_file.dat>" << std::endl;
     return 1;
   }
 
-  // Open the input file containing task descriptions
+  // Open the input file containing task descriptions.
   std::ifstream file(argv[1]);
   if (!file.is_open()) {
     std::cerr << "Error: cannot open file " << argv[1] << std::endl;
     return 1;
   }
 
-  Scheduler scheduler;  // create a scheduler instance
+  Scheduler scheduler;
   char id;
   unsigned int start_time, duration;
-  // Read tasks from file and add them to the scheduler
+  // Read each task from the file and add it to the scheduler.
   while (file >> id >> start_time >> duration) {
     scheduler.AddTask(id, start_time, duration);
   }
 
-  scheduler.Run();  // run the scheduler
-
+  scheduler.Run();
   return 0;
 }
