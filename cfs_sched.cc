@@ -142,6 +142,19 @@ class Scheduler {
   
     std::cout << std::endl;
 
+    if (current_task != nullptr) {
+      if (timeline.Size() != 0)
+        min_v_runtime = std::min(current_task->v_runtime, timeline.Min());
+      else
+        min_v_runtime = current_task->v_runtime;
+    } else {
+      if (timeline.Size() != 0)
+        min_v_runtime = timeline.Min();
+      else
+        min_v_runtime = 0;
+    }
+    
+
     // 7. Increment tick counter
     current_tick++;
   }
