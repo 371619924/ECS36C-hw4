@@ -1,123 +1,180 @@
-#include <iostream>
 #include <fstream>
-#include <sstream>
-#include <vector>
+#include <iostream>
+#include <memory>
 #include <queue>
-#include <map>
-#include <cstdlib>
+#include <vector>
 #include <algorithm>
+#include <stdexcept>
 
-struct Task {
-    char id;
-    unsigned int start_time;
-    unsigned int duration;
-    unsigned int remaining;
-    unsigned int vruntime;
+#include "multimap.h"  // include multimap header
+
+// Class representing a task
+class Task {
+ public:
+  // Constructor for Task; initializes id, start time, duration,
+  // and sets initial virtual runtime to 0
+  Task(char id, unsigned int start_time, unsigned int duration)
+      : id(id),
+        start_time(start_time),
+        remaining_duration(duration),
+        v_runtime(0),
+        last_run_tick(0) {}
+
+  char id;                     // task identifier
+  unsigned int start_time;     // tick at which task should start
+  unsigned int remaining_duration;  // ticks remaining for completion
+  unsigned int v_runtime;      // virtual runtime of the task
+  unsigned int last_run_tick;  // tick at which task last ran
 };
 
-// 将任务按开始时间排序
-bool CompareStartTime(const Task &a, const Task &b) {
-    return a.start_time < b.start_time;
-}
+// Class representing the Completely Fair Scheduler (CFS)
+class Scheduler {
+ public:
+  // Adds a new task to the scheduler, creates a new Task object,
+  // stores its pointer in all_tasks and adds it to the pending queue
+  void AddTask(char id, unsigned int start_time, unsigned int duration) {
+    all_tasks.push_back(
+        std::unique_ptr<Task>(new Task(id, start_time, duration)));
+    Task* raw_ptr = all_tasks.back().get();  // get raw pointer
+    pending_tasks.push(raw_ptr);             // add task to pending queue
+  }
+
+  // Runs the scheduling loop until no tasks remain pending or active
+  void Run() {
+    while (!pending_tasks.empty() || timeline.Size() != 0 ||
+           current_task != nullptr) {
+      ProcessTick();
+    }
+  }
+
+ private:
+  // Comparator for pending tasks based on start time
+  // If start times are equal, order by task identifier
+  struct PendingComparator {
+    bool operator()(const Task* a, const Task* b) const {
+      if (a->start_time != b->start_time) {
+        return a->start_time > b->start_time;
+      } else {
+        return a->id > b->id;
+      }
+    }
+  };
+
+  std::priority_queue<Task*, std::vector<Task*>, PendingComparator>
+      pending_tasks;               // tasks waiting to be launched
+  Multimap<unsigned int, Task*> timeline;  // timeline for scheduling
+  Task* current_task = nullptr;  // task currently running
+  unsigned int min_v_runtime = 0;  // global minimum virtual runtime
+  unsigned int current_tick = 0;   // current tick counter
+  std::vector<std::unique_ptr<Task>> all_tasks;  // storage for tasks
+
+  // Processes a single tick of the scheduler
+  void ProcessTick() {
+    // Flag to indicate if one or more new tasks were inserted this tick.
+    bool newTaskInserted = false;
+
+    // 1. Insert new tasks whose start time equals current_tick
+    while (!pending_tasks.empty() &&
+           pending_tasks.top()->start_time == current_tick) {
+      Task* task = pending_tasks.top();  // get pending task
+      pending_tasks.pop();               // remove it from pending queue
+      // initialize its virtual runtime to current global value
+      task->v_runtime = min_v_runtime;
+      timeline.Insert(task->v_runtime, task);  // insert into timeline
+      newTaskInserted = true;
+    }
+
+    // 2. Preemption check:
+    // If a task is running and the timeline is not empty, then:
+    // • If new tasks were just inserted, preempt if current task’s virtual runtime is greater than the minimum in timeline.
+    // • Otherwise, require an extra tick difference (i.e. current v_runtime > timeline.Min() + 1) before preempting.
+    if (current_task != nullptr && timeline.Size() != 0) {
+      if (newTaskInserted) {
+        if (current_task->v_runtime > timeline.Min()) {
+          timeline.Insert(current_task->v_runtime, current_task);
+          current_task = nullptr;
+        }
+      } else {
+        if (current_task->v_runtime > timeline.Min() + 1) {
+          timeline.Insert(current_task->v_runtime, current_task);
+          current_task = nullptr;
+        }
+      }
+    }
+
+    // 3. If no current task is running, select the next task from timeline
+    if (current_task == nullptr && timeline.Size() != 0) {
+      unsigned int min_key = timeline.Min();  // get smallest vruntime key
+      current_task = timeline.Get(min_key);    // select next task
+      timeline.Remove(min_key);                // remove it from timeline
+      min_v_runtime = current_task->v_runtime;   // update global min_vruntime
+    }
+
+    // 4. Run the current task for one tick
+    bool finished = false;
+    if (current_task != nullptr) {
+      current_task->remaining_duration--;  // decrement duration
+      current_task->v_runtime++;             // increment virtual runtime
+      finished = (current_task->remaining_duration == 0);
+      // update last run tick for tie-breaking if needed
+      current_task->last_run_tick = current_tick;
+    }
+
+    // 5. Calculate number of active tasks (in timeline plus current task)
+    unsigned int active_count = timeline.Size() +
+        (current_task != nullptr ? 1 : 0);
+
+    // 6. Output current tick status
+    // Format: <tick> [<#tasks>]: <task_id> with '*' if finished
+    std::cout << current_tick << " [" << active_count << "]: ";
+    if (current_task != nullptr) {
+      std::cout << current_task->id;
+      if (finished) {
+        std::cout << "*";
+        // After printing, remove the finished task from all_tasks
+        auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
+            [this](const std::unique_ptr<Task>& ptr) {
+              return ptr.get() == current_task;
+            });
+        if (it != all_tasks.end()) {
+          all_tasks.erase(it);
+        }
+        current_task = nullptr;
+      }
+    } else {
+      std::cout << '_';
+    }
+    std::cout << std::endl;
+
+    // 7. Increment tick counter
+    current_tick++;
+  }
+};
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <task_file.dat>" << std::endl;
-        return 1;
-    }
-    
-    std::ifstream infile(argv[1]);
-    if (!infile) {
-        std::cerr << "Error: cannot open file " << argv[1] << std::endl;
-        return 1;
-    }
-    
-    std::vector<Task> pending;
-    std::string line;
-    while (std::getline(infile, line)) {
-        if(line.empty()) continue;
-        std::istringstream iss(line);
-        Task t;
-        if (!(iss >> t.id >> t.start_time >> t.duration))
-            continue;
-        t.remaining = t.duration;
-        t.vruntime = 0;
-        pending.push_back(t);
-    }
-    infile.close();
-    
-    // 按任务开始时间排序
-    std::sort(pending.begin(), pending.end(), CompareStartTime);
-    
-    // ready 队列：使用 multimap 按虚拟运行时间排序；键为 vruntime，值为指向 Task 的指针
-    std::multimap<unsigned int, Task*> ready;
-    
-    Task* current = nullptr;
-    unsigned int global_min = 0;
-    unsigned int tick = 0;
-    
-    // 模拟直到所有任务均完成
-    while (!pending.empty() || !ready.empty() || current != nullptr) {
-        // 将所有在本 tick 应该启动的任务移入 ready 队列
-        while (!pending.empty() && pending.front().start_time == tick) {
-            // 新任务初始化 vruntime 为 global_min
-            pending.front().vruntime = global_min;
-            ready.insert({ pending.front().vruntime, &pending.front() });
-            pending.erase(pending.begin());
-        }
-        
-        // 如果当前没有任务，且就绪队列不空，则调度虚拟运行时间最小的任务
-        if (current == nullptr && !ready.empty()) {
-            auto it = ready.begin();
-            current = it->second;
-            global_min = current->vruntime;
-            ready.erase(it);
-        }
-        
-        // 计算系统中总任务数（当前运行的任务 + 就绪队列中任务数）
-        int total_tasks = (current ? 1 : 0) + ready.size();
-        
-        bool finished_this_tick = false;
-        // 运行当前任务 1 个 tick
-        if (current) {
-            current->vruntime += 1;
-            current->remaining -= 1;
-            if (current->remaining == 0) {
-                finished_this_tick = true;
-            }
-        }
-        
-        // 调度抢占：如果当前任务未结束，且就绪队列中存在虚拟运行时间更低的任务，则抢占
-        if (current && !finished_this_tick && !ready.empty()) {
-            auto it = ready.begin();
-            if (it->first < current->vruntime) {
-                // 将当前任务重新放入就绪队列，使用更新后的 vruntime 作为键
-                ready.insert({ current->vruntime, current });
-                current = nullptr;
-                if (!ready.empty()) {
-                    auto new_it = ready.begin();
-                    current = new_it->second;
-                    global_min = current->vruntime;
-                    ready.erase(new_it);
-                }
-            }
-        }
-        
-        // 输出本 tick 状态：格式 "<tick> [<总任务数>]: <任务ID>"，若任务刚结束则在 ID 后追加 "*"
-        std::cout << tick << " [" << total_tasks << "]: ";
-        if (current)
-            std::cout << current->id << (finished_this_tick ? "*" : "");
-        else
-            std::cout << "_";
-        std::cout << std::endl;
-        
-        // 如果当前任务在本 tick 执行后完成，置空当前任务
-        if (current && finished_this_tick) {
-            current = nullptr;
-        }
-        
-        tick++;
-    }
-    
-    return 0;
+  // Check for correct number of command-line arguments
+  if (argc != 2) {
+    std::cerr << "Usage: " << argv[0]
+              << " <task_file.dat>" << std::endl;
+    return 1;
+  }
+
+  // Open the input file containing task descriptions
+  std::ifstream file(argv[1]);
+  if (!file.is_open()) {
+    std::cerr << "Error: cannot open file " << argv[1] << std::endl;
+    return 1;
+  }
+
+  Scheduler scheduler;  // create a scheduler instance
+  char id;
+  unsigned int start_time, duration;
+  // Read tasks from file and add them to the scheduler
+  while (file >> id >> start_time >> duration) {
+    scheduler.AddTask(id, start_time, duration);
+  }
+
+  scheduler.Run();  // run the scheduler
+
+  return 0;
 }
