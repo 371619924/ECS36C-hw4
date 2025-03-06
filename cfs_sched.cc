@@ -1,194 +1,183 @@
-#include <fstream>
 #include <iostream>
-#include <memory>
-#include <queue>
+#include <fstream>
+#include <string>
 #include <vector>
+#include <memory>
 #include <algorithm>
-#include <stdexcept>
+#include "multimap.h"
 
-#include "multimap.h" // include multimap header
-
-// Class representing a task
-class Task
-{
-public:
-  // Constructor for Task; initializes id, start time, duration,
-  // and sets initial virtual runtime to 0
-  Task(char id, unsigned int start_time, unsigned int duration)
-      : id(id),
-        start_time(start_time),
-        remaining_duration(duration),
-        v_runtime(0),
-        last_run_tick(0) {}
-
-  char id;                         // task identifier
-  unsigned int start_time;         // tick at which task should start
-  unsigned int remaining_duration; // ticks remaining for completion
-  unsigned int v_runtime;          // virtual runtime of the task
-  unsigned int last_run_tick;      // tick at which task last ran
-};
-
-// Class representing the Completely Fair Scheduler (CFS)
-class Scheduler
-{
-public:
-  // Adds a new task to the scheduler, creates a new Task object,
-  // stores its pointer in all_tasks and adds it to the pending queue
-  void AddTask(char id, unsigned int start_time, unsigned int duration)
-  {
-    all_tasks.push_back(
-        std::unique_ptr<Task>(new Task(id, start_time, duration)));
-    // create and add new task using new (std::make_unique not in C++11)
-    Task *raw_ptr = all_tasks.back().get(); // get raw pointer
-    pending_tasks.push(raw_ptr);            // add task to pending queue
-  }
-
-  // Runs the scheduling loop until no tasks remain pending or active
-  void Run()
-  {
-    while (!pending_tasks.empty() || timeline.Size() != 0 ||
-           current_task != nullptr)
-    {
-      ProcessTick();
-    }
-  }
-
+// Task class to represent a process
+class Task {
 private:
-  // Comparator for pending tasks based on start time
-  // If start times are equal, order by task identifier
-  struct PendingComparator
-  {
-    bool operator()(const Task *a, const Task *b) const
-    {
-      if (a->start_time != b->start_time)
-      {
-        return a->start_time > b->start_time;
-      }
-      else
-      {
-        return a->id > b->id;
-      }
-    }
-  };
+    char id;              // Task identifier
+    unsigned int start;   // Start time in ticks
+    unsigned int duration; // Total duration in ticks
+    unsigned int remaining; // Remaining ticks
+    unsigned int vruntime; // Virtual runtime
 
-  std::priority_queue<Task *, std::vector<Task *>, PendingComparator>
-      pending_tasks;                            // tasks waiting to be launched
-  Multimap<unsigned int, Task *> timeline;      // timeline for scheduling
-  Task *current_task = nullptr;                 // task currently running
-  unsigned int min_v_runtime = 0;               // global minimum virtual runtime
-  unsigned int current_tick = 0;                // current tick counter
-  std::vector<std::unique_ptr<Task>> all_tasks; // storage for tasks
+public:
+    Task(char id, unsigned int start, unsigned int duration)
+        : id(id), start(start), duration(duration), remaining(duration), vruntime(0) {}
 
-  // Processes a single tick of the scheduler
-  void ProcessTick() {
-    // (1) 将当前 tick 到达的任务从 pending 队列移入 timeline
-    while (!pending_tasks.empty() &&
-           pending_tasks.top()->start_time == current_tick) {
-      Task* t = pending_tasks.top();
-      pending_tasks.pop();
-      // 为新任务设置初始 v_runtime = min_v_runtime（常见做法）
-      // 或者你也可以做一些微调，例如 min_v_runtime - 1 等，但要注意不要破坏其他测试
-      t->v_runtime = min_v_runtime;
-      timeline.Insert(t->v_runtime, t);
+    char getId() const { return id; }
+    unsigned int getStart() const { return start; }
+    unsigned int getDuration() const { return duration; }
+    unsigned int getRemaining() const { return remaining; }
+    unsigned int getVRuntime() const { return vruntime; }
+
+    void setVRuntime(unsigned int vr) { vruntime = vr; }
+    void incrementVRuntime() { vruntime++; }
+    void decrementRemaining() { if (remaining > 0) remaining--; }
+    bool isCompleted() const { return remaining == 0; }
+
+    friend std::ostream& operator<<(std::ostream& os, const Task& task) {
+        os << "Task " << task.id << " (Start: " << task.start 
+           << ", Duration: " << task.duration 
+           << ", Remaining: " << task.remaining
+           << ", VRuntime: " << task.vruntime << ")";
+        return os;
     }
-  
-    // (2) 如果当前没有运行的任务，就从 timeline 选取下一个
-    if (current_task == nullptr && timeline.Size() > 0) {
-      unsigned int key = timeline.Min();       // 拿到最小的 v_runtime
-      current_task = timeline.Get(key);        // 获取对应任务
-      timeline.Remove(key);                    // 从 timeline 移除它
-      min_v_runtime = current_task->v_runtime; // 更新全局 min_v_runtime
-    }
-  
-    // (3) **若有当前任务，让它运行一个 tick（先增量，再做抢占检查）**
-    bool finished = false;
-    if (current_task != nullptr) {
-      // 3.1 运行一 tick
-      current_task->remaining_duration -= 1;
-      current_task->v_runtime += 1; // 先增加 v_runtime
-      finished = (current_task->remaining_duration == 0);
-  
-      // 3.2 若尚未完成，则做抢占检查（此时 v_runtime 已更新）
-      if (!finished && timeline.Size() > 0) {
-        // 如果当前任务 v_runtime 大于 timeline 中最小的 key，则抢占
-        if (current_task->v_runtime > timeline.Min()) {
-          timeline.Insert(current_task->v_runtime, current_task);
-          current_task = nullptr;  // 表示本 tick 被抢占
-        }
-      }
-    }
-  
-    // (4) 如果当前任务在运行完毕后退出，则移除之
-    if (finished && current_task != nullptr) {
-      // 输出时标记 *
-      // 从 all_tasks 中 erase
-      auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
-                             [this](const std::unique_ptr<Task> &ptr) {
-                               return ptr.get() == current_task;
-                             });
-      if (it != all_tasks.end()) {
-        all_tasks.erase(it);
-      }
-      current_task = nullptr;
-    }
-  
-    // (5) 如果当前任务为空并且 timeline 中有任务，就马上取出新的当前任务
-    //     （这是为了处理 “同一个 tick 内被抢占/任务结束后，立刻换下一个任务” 的场景）
-    if (current_task == nullptr && timeline.Size() > 0) {
-      unsigned int key = timeline.Min();
-      current_task = timeline.Get(key);
-      timeline.Remove(key);
-      min_v_runtime = current_task->v_runtime; 
-    }
-  
-    // (6) 输出当前 tick 状态
-    unsigned int active_count = timeline.Size() + (current_task ? 1 : 0);
-    std::cout << current_tick << " [" << active_count << "]: ";
-    if (current_task != nullptr) {
-      std::cout << current_task->id;
-      if (finished) {
-        // 在上面 (4) 已经做了清理，这里只是打印 *
-        std::cout << "*";
-      }
-    } else {
-      std::cout << '_';
-    }
-    std::cout << std::endl;
-  
-    // (7) 递增全局时间
-    current_tick++;
-  }
-  
 };
 
-int main(int argc, char *argv[])
-{
-  // Check for correct number of command-line arguments
-  if (argc != 2)
-  {
-    std::cerr << "Usage: " << argv[0]
-              << " <task_file.dat>" << std::endl;
-    return 1;
-  }
+// Scheduler class to manage tasks
+class Scheduler {
+private:
+    unsigned int current_tick;
+    unsigned int min_vruntime;
+    std::vector<Task*> all_tasks;
+    Multimap<unsigned int, Task*> timeline;
+    Task* current_task;
+    
+    // Read tasks from file
+    bool readTasksFromFile(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Error: cannot open file " << filename << std::endl;
+            return false;
+        }
+        
+        char id;
+        unsigned int start, duration;
+        
+        while (file >> id >> start >> duration) {
+            Task* task = new Task(id, start, duration);
+            all_tasks.push_back(task);
+        }
+        
+        file.close();
+        return true;
+    }
 
-  // Open the input file containing task descriptions
-  std::ifstream file(argv[1]);
-  if (!file.is_open())
-  {
-    std::cerr << "Error: cannot open file " << argv[1] << std::endl;
-    return 1;
-  }
+public:
+    Scheduler() : current_tick(0), min_vruntime(0), current_task(nullptr) {}
+    
+    ~Scheduler() {
+        // Clean up all tasks
+        for (auto task : all_tasks) {
+            delete task;
+        }
+    }
+    
+    bool initialize(const std::string& filename) {
+        return readTasksFromFile(filename);
+    }
+    
+    // Run the scheduler
+    void run() {
+        // Sort all_tasks by start time and then by ID
+        std::sort(all_tasks.begin(), all_tasks.end(), [](const Task* a, const Task* b) {
+            if (a->getStart() == b->getStart())
+                return a->getId() < b->getId();
+            return a->getStart() < b->getStart();
+        });
+        
+        // Keep track of tasks that have not yet been added to the timeline
+        std::vector<Task*> pending_tasks = all_tasks;
+        // Count of currently active tasks
+        int active_task_count = 0;
+        
+        // Main scheduling loop
+        while (!pending_tasks.empty() || active_task_count > 0 || current_task != nullptr) {
+            // 1. Launch tasks that should start at current tick
+            auto it = pending_tasks.begin();
+            while (it != pending_tasks.end()) {
+                if ((*it)->getStart() == current_tick) {
+                    Task* task = *it;
+                    // Initialize virtual runtime to current min_vruntime
+                    task->setVRuntime(min_vruntime);
+                    // Add to timeline
+                    timeline.Insert(min_vruntime, task);
+                    active_task_count++;
+                    // Remove from pending tasks
+                    it = pending_tasks.erase(it);
+                } else if ((*it)->getStart() > current_tick) {
+                    // No more tasks to launch at current tick
+                    break;
+                } else {
+                    ++it;
+                }
+            }
+            
+            // 2. Check if current task should yield
+            if (current_task != nullptr) {
+                if (current_task->getVRuntime() > min_vruntime && !current_task->isCompleted()) {
+                    // Add back to timeline
+                    timeline.Insert(current_task->getVRuntime(), current_task);
+                }
+            }
+            
+            // 3. Get next task if no current task or current task completed/yielded
+            if (current_task == nullptr || current_task->isCompleted() || 
+                current_task->getVRuntime() > min_vruntime) {
+                if (timeline.Size() > 0) {
+                    // Get task with minimum virtual runtime
+                    current_task = timeline.Get(timeline.Min());
+                    // Remove from timeline
+                    timeline.Remove(timeline.Min());
+                    // Update min_vruntime
+                    min_vruntime = current_task->getVRuntime();
+                } else {
+                    current_task = nullptr;
+                }
+            }
+            
+            // 4. Print scheduling status
+            std::cout << current_tick << " [" << active_task_count << "]: ";
+            if (current_task != nullptr) {
+                std::cout << current_task->getId();
+                
+                // 5. Run current task for one tick
+                current_task->incrementVRuntime();
+                current_task->decrementRemaining();
+                
+                // Check if task has completed
+                if (current_task->isCompleted()) {
+                    std::cout << "*";
+                    active_task_count--;
+                    current_task = nullptr;
+                }
+            } else {
+                std::cout << "_";
+            }
+            std::cout << std::endl;
+            
+            // 6. Increment tick
+            current_tick++;
+        }
+    }
+};
 
-  Scheduler scheduler; // create a scheduler instance
-  char id;
-  unsigned int start_time, duration;
-  // Read tasks from file and add them to the scheduler
-  while (file >> id >> start_time >> duration)
-  {
-    scheduler.AddTask(id, start_time, duration);
-  }
-
-  scheduler.Run(); // run the scheduler
-
-  return 0;
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <task_file.dat>" << std::endl;
+        return 1;
+    }
+    
+    Scheduler scheduler;
+    if (!scheduler.initialize(argv[1])) {
+        return 1;
+    }
+    
+    scheduler.run();
+    return 0;
 }
