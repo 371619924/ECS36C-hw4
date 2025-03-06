@@ -93,7 +93,7 @@ public:
         
         // Keep track of tasks that have not yet been added to the timeline
         std::vector<Task*> pending_tasks = all_tasks;
-        // Count of currently active tasks
+        // Count of currently active tasks (tasks in the timeline or currently running)
         int active_task_count = 0;
         
         // Main scheduling loop
@@ -118,27 +118,29 @@ public:
                 }
             }
             
-            // 2. Check if current task should yield
+            // 2. If we have a current task, check if it should yield
             if (current_task != nullptr) {
-                if (current_task->getVRuntime() > min_vruntime && !current_task->isCompleted()) {
-                    // Add back to timeline
+                // Check if current task needs to be preempted
+                if (!current_task->isCompleted()) {
+                    // Add back to timeline with its updated vruntime
                     timeline.Insert(current_task->getVRuntime(), current_task);
+                    current_task = nullptr;
                 }
             }
             
-            // 3. Get next task if no current task or current task completed/yielded
-            if (current_task == nullptr || current_task->isCompleted() || 
-                current_task->getVRuntime() > min_vruntime) {
-                if (timeline.Size() > 0) {
-                    // Get task with minimum virtual runtime
-                    current_task = timeline.Get(timeline.Min());
-                    // Remove from timeline
-                    timeline.Remove(timeline.Min());
-                    // Update min_vruntime
-                    min_vruntime = current_task->getVRuntime();
-                } else {
-                    current_task = nullptr;
-                }
+            // 3. Get next task (the one with minimum vruntime)
+            if (current_task == nullptr && timeline.Size() > 0) {
+                // Get the minimum key (vruntime)
+                unsigned int min_key = timeline.Min();
+                
+                // Get task with minimum virtual runtime
+                current_task = timeline.Get(min_key);
+                
+                // Remove from timeline
+                timeline.Remove(min_key);
+                
+                // Update min_vruntime
+                min_vruntime = current_task->getVRuntime();
             }
             
             // 4. Print scheduling status
