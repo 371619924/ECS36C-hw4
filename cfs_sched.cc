@@ -61,9 +61,41 @@ class Scheduler {
     }
   };
 
+  // 新增：自定义MultiKey结构用于处理相同虚拟运行时间的情况
+  // 确保timeline中的任务顺序一致性
+  struct MultiKey {
+    unsigned int v_runtime;
+    char id;
+
+    // 自定义比较运算符，先比较虚拟运行时间，再比较任务ID
+    bool operator<(const MultiKey& other) const {
+      if (v_runtime != other.v_runtime) {
+        return v_runtime < other.v_runtime;
+      }
+      // 虚拟运行时间相同时，使用任务ID作为平局打破机制
+      return id < other.id;
+    }
+
+    bool operator>(const MultiKey& other) const {
+      if (v_runtime != other.v_runtime) {
+        return v_runtime > other.v_runtime;
+      }
+      // 虚拟运行时间相同时，使用任务ID作为平局打破机制
+      return id > other.id;
+    }
+
+    bool operator==(const MultiKey& other) const {
+      return (v_runtime == other.v_runtime) && (id == other.id);
+    }
+  };
+
   std::priority_queue<Task*, std::vector<Task*>, PendingComparator>
       pending_tasks;               // tasks waiting to be launched
-  Multimap<unsigned int, Task*> timeline;  // timeline for scheduling
+  
+  // 修改：将timeline的键类型从unsigned int改为MultiKey
+  // 这样可以同时考虑虚拟运行时间和任务ID
+  Multimap<MultiKey, Task*> timeline;  // timeline for scheduling using the custom key
+  
   Task* current_task = nullptr;  // task currently running
   unsigned int min_v_runtime = 0;  // global minimum virtual runtime
   unsigned int current_tick = 0;   // current tick counter
@@ -78,33 +110,41 @@ class Scheduler {
       pending_tasks.pop();               // remove it from pending queue
       // initialize its virtual runtime to current global value
       task->v_runtime = min_v_runtime;
-      timeline.Insert(task->v_runtime, task);  // insert into timeline
+      
+      // 修改：使用MultiKey结构作为timeline的键
+      // 创建包含虚拟运行时间和任务ID的复合键
+      MultiKey key = {task->v_runtime, task->id};
+      timeline.Insert(key, task);  // insert into timeline
     }
 
     // 2. Preemption check:
-    // If a task is running and the timeline is not empty, and the running
-    // task's virtual runtime is greater than the smallest in timeline,
-    // then preempt it
-    if (current_task != nullptr && timeline.Size() != 0 &&
-        current_task->v_runtime > timeline.Min()) {
-      timeline.Insert(current_task->v_runtime, current_task);
-          // reinsert current task into timeline
-      current_task = nullptr;  // yield current task
+    // 修改：更新抢占检查逻辑，使用MultiKey比较
+    if (current_task != nullptr && timeline.Size() != 0) {
+      // 获取timeline中的最小键
+      MultiKey min_key = timeline.Min();
+      // 检查当前任务是否应该被抢占（仅基于虚拟运行时间）
+      if (current_task->v_runtime > min_key.v_runtime) {
+        // 为当前任务创建复合键以重新插入timeline
+        MultiKey current_key = {current_task->v_runtime, current_task->id};
+        timeline.Insert(current_key, current_task);  // reinsert current task into timeline
+        current_task = nullptr;  // yield current task
+      }
     }
 
     // 3. If no current task is running, select the next task from timeline
     if (current_task == nullptr && timeline.Size() != 0) {
-      unsigned int min_key = timeline.Min();  // get smallest vruntime key
-      current_task = timeline.Get(min_key);    // select next task
-      timeline.Remove(min_key);                // remove it from timeline
-      min_v_runtime = current_task->v_runtime;   // update global min_v_runtime
+      // 修改：使用MultiKey获取下一个任务
+      MultiKey min_key = timeline.Min();  // get smallest vruntime key
+      current_task = timeline.Get(min_key);  // select next task
+      timeline.Remove(min_key);  // remove it from timeline
+      min_v_runtime = current_task->v_runtime;  // update global min_v_runtime
     }
 
     // 4. Run the current task for one tick
     bool finished = false;
     if (current_task != nullptr) {
       current_task->remaining_duration--;  // decrement duration
-      current_task->v_runtime++;             // increment virtual runtime
+      current_task->v_runtime++;  // increment virtual runtime
       finished = (current_task->remaining_duration == 0);
       // update last run tick for tie-breaking if needed
       current_task->last_run_tick = current_tick;
