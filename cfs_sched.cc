@@ -15,11 +15,13 @@ class Task {
   Task(char id, unsigned int start_time, unsigned int duration)
       : id(id),
         start_time(start_time),
+        duration(duration),
         remaining_duration(duration),
         v_runtime(0) {}
 
   char id;                     // task identifier
   unsigned int start_time;     // tick at which task should start
+  unsigned int duration;       // original duration in ticks
   unsigned int remaining_duration;  // ticks remaining for completion
   unsigned int v_runtime;      // virtual runtime of the task
 };
@@ -64,43 +66,46 @@ class Scheduler {
 
   // Processes a single tick of the scheduler
   void ProcessTick() {
-    // 1. Add tasks that are due to start at the current tick
-    while (!pending_tasks.empty() &&
-           pending_tasks.top()->start_time <= current_tick) {
+    // 1. Launch tasks that are due to start at current tick
+    while (!pending_tasks.empty() && 
+           pending_tasks.top()->start_time == current_tick) {
       Task* task = pending_tasks.top();
       pending_tasks.pop();
-      // Initialize with current minimum virtual runtime
       task->v_runtime = min_v_runtime;
       timeline.Insert(task->v_runtime, task);
     }
 
-    // 2. If a task is currently running, add it back to the timeline
+    // 2. Check if current task needs to be preempted
+    bool task_preempted = false;
     if (current_task != nullptr) {
-      // Only if the task is not completed
-      if (current_task->remaining_duration > 0) {
+      // Only if there are other tasks AND current task's vruntime is greater
+      if (timeline.Size() > 0 && current_task->v_runtime > timeline.Min()) {
         timeline.Insert(current_task->v_runtime, current_task);
+        current_task = nullptr;
+        task_preempted = true;
       }
-      current_task = nullptr;
     }
 
-    // 3. Get the task with the minimum virtual runtime
-    if (timeline.Size() > 0) {
+    // 3. Schedule next task if needed
+    if (current_task == nullptr && timeline.Size() > 0) {
       unsigned int min_key = timeline.Min();
       current_task = timeline.Get(min_key);
       timeline.Remove(min_key);
+      
+      // Only update min_v_runtime when selecting a new task
       min_v_runtime = current_task->v_runtime;
     }
 
-    // 4. Calculate number of active tasks
+    // 4. Calculate active task count
     unsigned int active_count = timeline.Size() + (current_task != nullptr ? 1 : 0);
 
-    // 5. Output current scheduling status
+    // 5. Output current status
     std::cout << current_tick << " [" << active_count << "]: ";
     
     if (current_task != nullptr) {
       std::cout << current_task->id;
       
-      // Run the task for one tick
+      // Execute task for one tick
       current_task->v_runtime++;
       current_task->remaining_duration--;
       
