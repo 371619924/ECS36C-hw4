@@ -73,10 +73,10 @@ class Scheduler {
     return std::make_pair(t->v_runtime, t->last_run_tick);
   }
 
-  // Helper: returns an “adjusted” key from the minimum in the timeline.
-  // 修改说明：将原来对虚拟运行时间加 1 的逻辑更改为对最后运行时刻加 1，从而在无新任务插入时延迟切换。
+  // Helper: returns an "adjusted" key from the minimum in the timeline.
+  // Modified: Adjust the virtual runtime instead of last run tick to properly implement delay
   Key adjustedMinKey(const Key& k) {
-    return std::make_pair(k.first, k.second + 1);
+    return std::make_pair(k.first + 1, k.second);
   }
 
   // Processes one tick of scheduling.
@@ -96,7 +96,7 @@ class Scheduler {
 
     // 2. Preemption check:
     // If a task is running and the timeline is not empty, then:
-    // • If new tasks were inserted, preempt if current task’s key is greater than the minimum.
+    // • If new tasks were inserted, preempt if current task's key is greater than the minimum.
     // • Otherwise, require an extra tick (i.e. current key > adjusted minimum) before preempting.
     if (current_task != nullptr && timeline.Size() != 0) {
       Key current_key = makeKey(current_task);
@@ -119,7 +119,7 @@ class Scheduler {
       Key min_key = timeline.Min();
       current_task = timeline.Get(min_key);
       timeline.Remove(min_key);
-      // Update global minimum to the selected task’s virtual runtime.
+      // Update global minimum to the selected task's virtual runtime.
       min_v_runtime = current_task->v_runtime;
       just_switched = true;
     }
@@ -134,7 +134,7 @@ class Scheduler {
       current_task->last_run_tick = current_tick;
     }
 
-    // 5. Output the current tick’s status.
+    // 5. Output the current tick's status.
     unsigned int active_count = timeline.Size() + (current_task ? 1 : 0);
     std::cout << current_tick << " [" << active_count << "]: ";
     if (current_task != nullptr) {
