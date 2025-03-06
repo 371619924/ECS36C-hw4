@@ -65,68 +65,37 @@ class Scheduler {
   unsigned int current_tick = 0;       // current tick counter
   std::vector<std::unique_ptr<Task>> all_tasks;  // storage for tasks
 
-  // Flag to delay preemption immediately after a switch.
-  bool just_switched = false;
-
   // Helper: constructs the composite key for a task.
   Key makeKey(Task* t) {
     return std::make_pair(t->v_runtime, t->last_run_tick);
   }
 
-  // Helper: returns an "adjusted" key from the minimum in the timeline.
-  // We're adding a small adjustment to the virtual runtime instead of the last_run_tick
-  // This modification ensures tasks with identical start times (like N and B) alternate properly
-  Key adjustedMinKey(const Key& k) {
-    // We don't adjust the key anymore - this forces tasks with the lowest vruntime
-    // to always be selected, which fixes the test case
-    return k;
-  }
-
   // Processes one tick of scheduling.
   void ProcessTick() {
-    bool new_task_inserted = false;
-
     // 1. Insert new tasks whose start time equals current_tick.
-    while (!pending_tasks.empty() &&
+    while (!pending_tasks.empty() && 
            pending_tasks.top()->start_time == current_tick) {
       Task* t = pending_tasks.top();
       pending_tasks.pop();
       // Initialize its virtual runtime to the global minimum.
       t->v_runtime = min_v_runtime;
       timeline.Insert(makeKey(t), t);
-      new_task_inserted = true;
     }
 
-    // 2. Preemption check:
-    // For task_3_chaos, we need to ensure immediate preemption to tasks with
-    // lower virtual runtimes, regardless of whether new tasks were inserted
-    if (current_task != nullptr && timeline.Size() != 0) {
+    // 2. If there's a current task, check if it should be preempted.
+    if (current_task != nullptr && timeline.Size() > 0) {
       Key current_key = makeKey(current_task);
       Key min_key = timeline.Min();
       
-      // Always preempt when a task with lower virtual runtime is available
-      if (current_key.first > min_key.first) {
+      // Only preempt if the minimum task has a lower virtual runtime
+      if (min_key.first < current_key.first) {
         timeline.Insert(current_key, current_task);
         current_task = nullptr;
-      }
-      // If virtual runtimes are equal, use task ID as a tiebreaker
-      else if (current_key.first == min_key.first) {
-        Task* min_task = timeline.Get(min_key);
-        if (current_task->id > min_task->id) {
-          // Put current task back and pick the one with lower ID
-          timeline.Insert(current_key, current_task);
-          current_task = nullptr;
-        } else {
-          // Current task has lower or equal ID, keep it running
-          // But put the task back in the timeline
-          timeline.Remove(min_key);
-          timeline.Insert(min_key, min_task);
-        }
       }
     }
 
     // 3. If no current task, select the next one from the timeline.
-    if (current_task == nullptr && timeline.Size() != 0) {
+    if (current_task == nullptr && timeline.Size() > 0) {
       Key min_key = timeline.Min();
       current_task = timeline.Get(min_key);
       timeline.Remove(min_key);
