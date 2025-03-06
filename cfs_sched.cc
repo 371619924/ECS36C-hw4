@@ -80,109 +80,85 @@ private:
   std::vector<std::unique_ptr<Task>> all_tasks; // storage for tasks
 
   // Processes a single tick of the scheduler
-  void ProcessTick()
-  {
-    // 1. Insert new tasks whose start time equals current_tick
+  void ProcessTick() {
+    // (1) 将当前 tick 到达的任务从 pending 队列移入 timeline
     while (!pending_tasks.empty() &&
-           pending_tasks.top()->start_time == current_tick)
-    {
-      Task *task = pending_tasks.top(); // get pending task
-      pending_tasks.pop();              // remove it from pending queue
-      if (min_v_runtime > 0)
-        task->v_runtime = min_v_runtime - 1;
-      else
-        task->v_runtime = 0;
-      timeline.Insert(task->v_runtime, task); // insert into timeline
+           pending_tasks.top()->start_time == current_tick) {
+      Task* t = pending_tasks.top();
+      pending_tasks.pop();
+      // 为新任务设置初始 v_runtime = min_v_runtime（常见做法）
+      // 或者你也可以做一些微调，例如 min_v_runtime - 1 等，但要注意不要破坏其他测试
+      t->v_runtime = min_v_runtime;
+      timeline.Insert(t->v_runtime, t);
     }
-
-    // 2. Preemption check:
-    // If a task is running and the timeline is not empty, and the running
-    // task's virtual runtime is greater than the smallest in timeline,
-    // then preempt it
-    if (current_task != nullptr && timeline.Size() != 0 &&
-        current_task->v_runtime > timeline.Min())
-    {
-      timeline.Insert(current_task->v_runtime, current_task);
-      // reinsert current task into timeline
-      current_task = nullptr; // yield current task
+  
+    // (2) 如果当前没有运行的任务，就从 timeline 选取下一个
+    if (current_task == nullptr && timeline.Size() > 0) {
+      unsigned int key = timeline.Min();       // 拿到最小的 v_runtime
+      current_task = timeline.Get(key);        // 获取对应任务
+      timeline.Remove(key);                    // 从 timeline 移除它
+      min_v_runtime = current_task->v_runtime; // 更新全局 min_v_runtime
     }
-
-    // 3. If no current task is running, select the next task from timeline
-    if (current_task == nullptr && timeline.Size() != 0)
-    {
-      unsigned int min_key = timeline.Min();   // get smallest vruntime key
-      current_task = timeline.Get(min_key);    // select next task
-      timeline.Remove(min_key);                // remove it from timeline
-      min_v_runtime = current_task->v_runtime; // update global min_v_runtime
-    }
-
-    // 4. Run the current task for one tick
+  
+    // (3) **若有当前任务，让它运行一个 tick（先增量，再做抢占检查）**
     bool finished = false;
-    if (current_task != nullptr)
-    {
-      current_task->remaining_duration--; // decrement duration
-      current_task->v_runtime++;          // increment virtual runtime
+    if (current_task != nullptr) {
+      // 3.1 运行一 tick
+      current_task->remaining_duration -= 1;
+      current_task->v_runtime += 1; // 先增加 v_runtime
       finished = (current_task->remaining_duration == 0);
-      // update last run tick for tie-breaking if needed
-      current_task->last_run_tick = current_tick;
-    }
-
-    // 5. Calculate number of active tasks (in timeline plus current task)
-    unsigned int active_count = timeline.Size() +
-                                (current_task != nullptr ? 1 : 0);
-
-    // 6. Output current tick status
-    // Format: <tick> [<#tasks>]: <task_id> with '*' if finished
-    std::cout << current_tick << " [" << active_count << "]: ";
-    if (current_task != nullptr)
-    {
-      std::cout << current_task->id;
-      if (finished)
-      {
-        std::cout << "*";
-        // 删除已完成任务
-        auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
-                               [this](const std::unique_ptr<Task> &ptr)
-                               {
-                                 return ptr.get() == current_task;
-                               });
-        if (it != all_tasks.end())
-        {
-          all_tasks.erase(it);
+  
+      // 3.2 若尚未完成，则做抢占检查（此时 v_runtime 已更新）
+      if (!finished && timeline.Size() > 0) {
+        // 如果当前任务 v_runtime 大于 timeline 中最小的 key，则抢占
+        if (current_task->v_runtime > timeline.Min()) {
+          timeline.Insert(current_task->v_runtime, current_task);
+          current_task = nullptr;  // 表示本 tick 被抢占
         }
-        // 在清空 current_task 前，更新全局 min_v_runtime
-        if (timeline.Size() != 0)
-          min_v_runtime = timeline.Min();
-        else
-          min_v_runtime = 0;
-        current_task = nullptr; // 清空 finished 任务
       }
     }
-    else
-    {
+  
+    // (4) 如果当前任务在运行完毕后退出，则移除之
+    if (finished && current_task != nullptr) {
+      // 输出时标记 *
+      // 从 all_tasks 中 erase
+      auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
+                             [this](const std::unique_ptr<Task> &ptr) {
+                               return ptr.get() == current_task;
+                             });
+      if (it != all_tasks.end()) {
+        all_tasks.erase(it);
+      }
+      current_task = nullptr;
+    }
+  
+    // (5) 如果当前任务为空并且 timeline 中有任务，就马上取出新的当前任务
+    //     （这是为了处理 “同一个 tick 内被抢占/任务结束后，立刻换下一个任务” 的场景）
+    if (current_task == nullptr && timeline.Size() > 0) {
+      unsigned int key = timeline.Min();
+      current_task = timeline.Get(key);
+      timeline.Remove(key);
+      min_v_runtime = current_task->v_runtime; 
+    }
+  
+    // (6) 输出当前 tick 状态
+    unsigned int active_count = timeline.Size() + (current_task ? 1 : 0);
+    std::cout << current_tick << " [" << active_count << "]: ";
+    if (current_task != nullptr) {
+      std::cout << current_task->id;
+      if (finished) {
+        // 在上面 (4) 已经做了清理，这里只是打印 *
+        std::cout << "*";
+      }
+    } else {
       std::cout << '_';
     }
-
     std::cout << std::endl;
-
-    if (current_task != nullptr)
-    {
-      if (timeline.Size() != 0)
-        min_v_runtime = std::min(current_task->v_runtime, timeline.Min());
-      else
-        min_v_runtime = current_task->v_runtime;
-    }
-    else
-    {
-      if (timeline.Size() != 0)
-        min_v_runtime = timeline.Min();
-      else
-        min_v_runtime = 0;
-    }
-
-    // 7. Increment tick counter
+  
+    // (7) 递增全局时间
     current_tick++;
   }
+  
 };
 
 int main(int argc, char *argv[])
