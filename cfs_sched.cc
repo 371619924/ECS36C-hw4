@@ -9,7 +9,7 @@
 
 #include "multimap.h"  // include multimap header
 
-// Composite key: (virtual runtime, last run tick)
+// Define a composite key: (virtual runtime, last run tick)
 typedef std::pair<unsigned int, unsigned int> Key;
 
 // Class representing a task.
@@ -39,7 +39,7 @@ class Scheduler {
     pending_tasks.push(raw_ptr);
   }
 
-  // Runs the scheduling loop until no tasks remain pending or active.
+  // Runs the scheduling loop until no tasks remain.
   void Run() {
     while (!pending_tasks.empty() || timeline.Size() != 0 || current_task != nullptr) {
       ProcessTick();
@@ -47,7 +47,7 @@ class Scheduler {
   }
 
  private:
-  // Comparator for pending tasks based on start time and then task id.
+  // Comparator for pending tasks based on start time; if equal, order by task id.
   struct PendingComparator {
     bool operator()(const Task* a, const Task* b) const {
       if (a->start_time != b->start_time)
@@ -57,46 +57,70 @@ class Scheduler {
     }
   };
 
-  std::priority_queue<Task*, std::vector<Task*>, PendingComparator> pending_tasks;  // tasks waiting to be launched
-  // Timeline now uses a composite key for tie-breaking.
+  std::priority_queue<Task*, std::vector<Task*>, PendingComparator> pending_tasks;  
+  // Timeline: use the composite key to allow tie-breaking.
   Multimap<Key, Task*> timeline;
   Task* current_task = nullptr;      // currently running task
   unsigned int min_v_runtime = 0;      // global minimum virtual runtime
   unsigned int current_tick = 0;       // current tick counter
   std::vector<std::unique_ptr<Task>> all_tasks;  // storage for tasks
 
-  // Helper to construct the composite key for a task.
-  Key makeKey(Task* task) {
-    return std::make_pair(task->v_runtime, task->last_run_tick);
+  // Flag to delay preemption immediately after a switch.
+  bool just_switched = false;
+
+  // Helper: constructs the composite key for a task.
+  Key makeKey(Task* t) {
+    return std::make_pair(t->v_runtime, t->last_run_tick);
   }
 
-  // Processes a single tick.
+  // Helper: returns an “adjusted” key from the minimum in the timeline.
+  Key adjustedMinKey(const Key& k) {
+    return std::make_pair(k.first + 1, k.second);
+  }
+
+  // Processes one tick of scheduling.
   void ProcessTick() {
+    bool new_task_inserted = false;
+
     // 1. Insert new tasks whose start time equals current_tick.
-    while (!pending_tasks.empty() && pending_tasks.top()->start_time == current_tick) {
-      Task* task = pending_tasks.top();
+    while (!pending_tasks.empty() &&
+           pending_tasks.top()->start_time == current_tick) {
+      Task* t = pending_tasks.top();
       pending_tasks.pop();
-      task->v_runtime = min_v_runtime;  // initialize v_runtime to global min
-      timeline.Insert(makeKey(task), task);
+      // Initialize its virtual runtime to the global minimum.
+      t->v_runtime = min_v_runtime;
+      timeline.Insert(makeKey(t), t);
+      new_task_inserted = true;
     }
 
     // 2. Preemption check:
-    // If a task is running and the timeline is not empty, compare the composite keys.
+    // If a task is running and the timeline is not empty, then:
+    // • If new tasks were inserted, preempt if current task’s key is greater than the minimum.
+    // • Otherwise, require an extra tick (i.e. current key > adjusted minimum) before preempting.
     if (current_task != nullptr && timeline.Size() != 0) {
       Key current_key = makeKey(current_task);
       Key min_key = timeline.Min();
-      if (current_key > min_key) {  // lexicographic order: if current task is "worse"
-        timeline.Insert(current_key, current_task);
-        current_task = nullptr;
+      if (new_task_inserted) {
+        if (current_key > min_key) {
+          timeline.Insert(current_key, current_task);
+          current_task = nullptr;
+        }
+      } else {
+        if (current_key > adjustedMinKey(min_key)) {
+          timeline.Insert(current_key, current_task);
+          current_task = nullptr;
+        }
       }
     }
 
-    // 3. If no task is running, select the next task from the timeline.
+    // 3. If no current task, select the next one from the timeline.
     if (current_task == nullptr && timeline.Size() != 0) {
       Key min_key = timeline.Min();
       current_task = timeline.Get(min_key);
       timeline.Remove(min_key);
-      min_v_runtime = current_task->v_runtime;  // update global min
+      // Update global minimum to the selected task’s virtual runtime.
+      min_v_runtime = current_task->v_runtime;
+      just_switched = true;
     }
 
     // 4. Run the current task for one tick.
@@ -105,11 +129,12 @@ class Scheduler {
       current_task->remaining_duration--;
       current_task->v_runtime++;  // increment virtual runtime
       finished = (current_task->remaining_duration == 0);
-      current_task->last_run_tick = current_tick;  // update last run tick for tie-breaking
+      // Update last run tick (used for tie-breaking).
+      current_task->last_run_tick = current_tick;
     }
 
-    // 5. Output the current tick status.
-    unsigned int active_count = timeline.Size() + (current_task != nullptr ? 1 : 0);
+    // 5. Output the current tick’s status.
+    unsigned int active_count = timeline.Size() + (current_task ? 1 : 0);
     std::cout << current_tick << " [" << active_count << "]: ";
     if (current_task != nullptr) {
       std::cout << current_task->id;
@@ -117,12 +142,11 @@ class Scheduler {
         std::cout << "*";
         // Remove finished task from storage.
         auto it = std::find_if(all_tasks.begin(), all_tasks.end(),
-            [this](const std::unique_ptr<Task>& ptr) {
-              return ptr.get() == current_task;
-            });
-        if (it != all_tasks.end()) {
+                               [this](const std::unique_ptr<Task>& ptr) {
+                                 return ptr.get() == current_task;
+                               });
+        if (it != all_tasks.end())
           all_tasks.erase(it);
-        }
         current_task = nullptr;
       }
     } else {
@@ -130,7 +154,10 @@ class Scheduler {
     }
     std::cout << std::endl;
 
-    // 6. Increment tick counter.
+    if (just_switched)
+      just_switched = false;
+
+    // 6. Increment the tick counter.
     current_tick++;
   }
 };
