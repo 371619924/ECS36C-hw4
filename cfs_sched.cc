@@ -74,8 +74,9 @@ class Scheduler {
   }
 
   // Helper: returns an “adjusted” key from the minimum in the timeline.
+  // 修改说明：将原来对虚拟运行时间加 1 的逻辑更改为对最后运行时刻加 1，从而在无新任务插入时延迟切换。
   Key adjustedMinKey(const Key& k) {
-    return std::make_pair(k.first + 1, k.second);
+    return std::make_pair(k.first, k.second + 1);
   }
 
   // Processes one tick of scheduling.
