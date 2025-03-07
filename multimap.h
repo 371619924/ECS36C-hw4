@@ -1,348 +1,422 @@
+/*
+================================================================================
+Multimap.h – Detailed Annotated Version
+================================================================================
+
+Purpose:
+This file implements a template class "Multimap" that supports multiple values 
+per key. Internally, the data is stored in a Left-Leaning Red-Black tree (LLRB). 
+Each tree node holds a key and a vector of associated values. In addition to the 
+usual map operations (insertion, lookup, removal), this container allows duplicate 
+keys (each duplicate value is stored in the vector). Self-balancing is maintained 
+via rotations, color flips, and other helper functions to guarantee average-case 
+O(log N) complexity for most operations.
+
+Structure:
+1. Public API:
+   - Functions for getting the size, checking emptiness, inserting key-value 
+     pairs, removing a value for a given key (removing only the first value if 
+     multiple exist), querying for the first value, and retrieving minimum/maximum 
+     keys.
+2. Private Members and Helper Functions:
+   - The internal Node structure (with key, values vector, color, left/right children)
+   - Iterative and recursive helper methods for search, insertion, removal, and 
+     in-order printing.
+3. Self-balancing Helpers:
+   - Functions to check node color, rotate left/right, flip colors, move red 
+     links, and fix up the tree structure.
+   
+Each line in the implementation is annotated in detail to explain its purpose.
+================================================================================
+*/
+
 #ifndef MULTIMAP_H_
 #define MULTIMAP_H_
 
-#include <iostream>
-#include <memory>
-#include <vector>
-#include <string>
-#include <utility>
-#include <stdexcept>
+#include <iostream>     // For basic I/O (if needed for debugging)
+#include <memory>       // For std::unique_ptr
+#include <vector>       // For std::vector to store multiple values per key
+#include <string>       // For string handling (if needed)
+#include <utility>      // For std::pair and std::move
+#include <stdexcept>    // For throwing runtime errors
 
+// Template class Multimap supporting keys of type K and values of type V.
 template <typename K, typename V>
 class Multimap {
  public:
-  // Return size of tree
+  // ---------------- Public API ----------------
+
+  // Returns the total number of key-value pairs stored in the tree.
   unsigned int Size();
-  // Return first value associated with @key
+  
+  // Returns a reference to the first value associated with the given key.
+  // Throws a runtime_error if the key is not found or has no associated values.
   const V& Get(const K& key);
-  // Return whether @key is found in tree
+  
+  // Checks whether the multimap contains the specified key.
   bool Contains(const K& key);
-  // Return max key in tree
+  
+  // Returns a reference to the maximum key in the tree.
+  // Throws a runtime_error if the tree is empty.
   const K& Max();
-  // Return min key in tree
+  
+  // Returns a reference to the minimum key in the tree.
+  // Throws a runtime_error if the tree is empty.
   const K& Min();
-  // Insert @key and @value in tree
+  
+  // Inserts a key-value pair into the tree.
+  // If the key already exists, appends the value to the existing vector.
   void Insert(const K &key, const V &value);
-  // Remove first occurrence of @key's value
+  
+  // Removes the first occurrence of the value associated with the given key.
+  // If the key has only one value, the entire node is removed.
   void Remove(const K &key);
-  // Print tree in-order
+  
+  // Prints the tree in an in-order traversal.
   void Print();
 
  private:
+  // ---------------- Internal Data Structures ----------------
+
+  // Color enumeration for red-black balancing.
   enum Color { RED, BLACK };
-  struct Node{
-    K key;
-    std::vector<V> values;
-    bool color;
-    std::unique_ptr<Node> left;
-    std::unique_ptr<Node> right;
+  
+  // Node structure for the LLRB tree.
+  struct Node {
+    K key;                   // The key stored in the node.
+    std::vector<V> values;   // Vector of values associated with this key.
+    bool color;              // Node color: RED or BLACK.
+    std::unique_ptr<Node> left;   // Left child pointer.
+    std::unique_ptr<Node> right;  // Right child pointer.
+    
+    // Constructor: initializes node with key, an empty vector of values,
+    // default color RED, and null left/right children.
+    Node(const K &k)
+      : key(k), values(), color(RED), left(nullptr), right(nullptr) {}
   };
+
+  // Root of the red-black tree.
   std::unique_ptr<Node> root;
+  // Total number of key-value pairs (each occurrence counts) in the multimap.
   unsigned int cur_size = 0;
 
-  // Iterative helper methods
+  // ---------------- Helper Methods ----------------
+
+  // Iterative helper: search for a node with the given key, starting at node n.
+  // Returns a raw pointer to the found node, or nullptr if not found.
   Node* Get(Node *n, const K &key);
 
-  // Recursive helper methods
+  // Recursive helper: finds the minimum node (leftmost) in the subtree rooted at n.
   Node* Min(Node *n);
+  
+  // Recursive helper: inserts a key-value pair into the subtree rooted at n.
   void Insert(std::unique_ptr<Node> &n, const K &key, const V &value);
+  
+  // Recursive helper: removes one occurrence of the key from the subtree rooted at n.
   void Remove(std::unique_ptr<Node> &n, const K &key);
+  
+  // Recursive helper: performs an in-order traversal of the subtree rooted at n and prints nodes.
   void Print(Node *n);
 
-  // Helper methods for the self-balancing
+  // ---------------- Self-Balancing Helper Methods ----------------
+
+  // Checks if node n is red; returns false if n is null.
   bool IsRed(Node *n);
+  
+  // Flips the color of node n and its immediate children.
   void FlipColors(Node *n);
+  
+  // Performs a right rotation on the subtree rooted at prt.
   void RotateRight(std::unique_ptr<Node> &prt);
+  
+  // Performs a left rotation on the subtree rooted at prt.
   void RotateLeft(std::unique_ptr<Node> &prt);
+  
+  // Fixes up the subtree rooted at n to restore red-black properties.
   void FixUp(std::unique_ptr<Node> &n);
+  
+  // Moves a red node to the right in preparation for deletion from the right subtree.
   void MoveRedRight(std::unique_ptr<Node> &n);
+  
+  // Moves a red node to the left in preparation for deletion from the left subtree.
   void MoveRedLeft(std::unique_ptr<Node> &n);
+  
+  // Deletes the minimum node in the subtree rooted at n.
   void DeleteMin(std::unique_ptr<Node> &n);
 };
 
-// Returns total number of key-value pairs in the multimap
+// ============================================================================
+// Implementation of Public API Methods
+// ============================================================================
+
+// Returns the total number of key-value pairs stored in the multimap.
 template <typename K, typename V>
 unsigned int Multimap<K, V>::Size() {
-  return cur_size;
+  return cur_size;  // Return the maintained count.
 }
 
-// Iteratively searches for the node with the
-// given key starting from the provided node
+// ============================================================================
+// Implementation of Iterative Helper Methods
+// ============================================================================
+
+// Iteratively searches for a node with the given key, starting at node n.
 template <typename K, typename V>
 typename Multimap<K, V>::Node* Multimap<K, V>::Get(Node *n, const K &key) {
-  while (n) {
-    if (key == n->key)
-      return n;  // found matching key
-
-    if (key < n->key)
-      n = n->left.get();  // move to left child
-    else
-      n = n->right.get();  // move to right child
+  while (n) {                         // Loop until reaching a null pointer.
+    if (key == n->key)                // If the current node's key matches...
+      return n;                       // ...return this node.
+    if (key < n->key)                 // If search key is less...
+      n = n->left.get();              // ...move to left child.
+    else                              // Otherwise...
+      n = n->right.get();             // ...move to right child.
   }
-  return nullptr;  // key not found
+  return nullptr;                     // Key not found.
 }
 
-// Returns the first value associated with the given key
-// Throws an error if the key is not found or
-// if the key has no associated values
+// ============================================================================
+// Implementation of Public API: Get, Contains, Max, Min
+// ============================================================================
+
+// Returns the first value associated with the given key.
+// Throws runtime_error if key not found or value list is empty.
 template <typename K, typename V>
 const V& Multimap<K, V>::Get(const K &key) {
-  Node *n = Get(root.get(), key);  // get node with the key
+  Node *n = Get(root.get(), key);     // Search for node from root.
   if (!n)
-    // key missing
-    throw std::runtime_error("Error: cannot find key");
+    throw std::runtime_error("Error: cannot find key"); // Key missing.
   if (n->values.empty())
-    // key exists but has no values
-    throw std::runtime_error("Error: key has no values");
-  return n->values.front();  // return first value
+    throw std::runtime_error("Error: key has no values"); // No values stored.
+  return n->values.front();           // Return the first stored value.
 }
 
-// Checks if the multimap contains the given key
+// Returns true if the multimap contains the given key.
 template <typename K, typename V>
 bool Multimap<K, V>::Contains(const K &key) {
-  // return true if node is found
-  return Get(root.get(), key) != nullptr;
+  return Get(root.get(), key) != nullptr; // Key exists if search result is non-null.
 }
 
-// Returns the maximum key in the multimap
-// Throws an error if the multimap is empty
+// Returns the maximum key in the multimap.
+// Traverses to the rightmost node.
 template <typename K, typename V>
 const K& Multimap<K, V>::Max(void) {
-  Node *n = root.get();  // start at root
+  Node *n = root.get();               // Start at root.
   if (!n)
-    // empty tree error
-    throw std::runtime_error("Error: empty tree");
-  // traverse to rightmost node
-  while (n->right) n = n->right.get();
-  return n->key;  // return maximum key
+    throw std::runtime_error("Error: empty tree"); // If tree is empty.
+  while (n->right)                    // While right child exists...
+    n = n->right.get();               // ...move to right child.
+  return n->key;                      // Return key of rightmost node.
 }
 
-// Returns the minimum key in the multimap
-// Throws an error if the multimap is empty
+// Returns the minimum key in the multimap.
 template <typename K, typename V>
 const K& Multimap<K, V>::Min(void) {
-  // find minimum node recursively
-  Node *n = Min(root.get());
+  Node *n = Min(root.get());          // Get leftmost node recursively.
   if (!n)
-    // empty tree error
     throw std::runtime_error("Error: empty tree");
-  return n->key;  // return minimum key
+  return n->key;                      // Return its key.
 }
 
-// Recursively finds the minimum node starting from the given node
+// ============================================================================
+// Implementation of Recursive Helper Methods
+// ============================================================================
+
+// Recursively finds the minimum node in the subtree rooted at n.
 template <typename K, typename V>
 typename Multimap<K, V>::Node* Multimap<K, V>::Min(Node *n) {
   if (!n)
-    return nullptr;  // return null if node is null
+    return nullptr;                   // Return null if node is null.
   if (n->left)
-    return Min(n->left.get());  // recursively go to left child
+    return Min(n->left.get());        // Recurse left if possible.
   else
-    return n;  // leftmost node found
+    return n;                         // Found the leftmost node.
 }
 
-// Checks if the given node is red
+// ============================================================================
+// Implementation of Self-Balancing Helper Methods
+// ============================================================================
+
+// Returns true if node n is red; null is considered black.
 template <typename K, typename V>
 bool Multimap<K, V>::IsRed(Node *n) {
-  if (!n) return false;  // return false if node is null
-  return (n->color == RED);  // return true if node's color is red
+  if (!n) return false;
+  return (n->color == RED);
 }
 
-// Flips the color of the given node and its children
+// Flips the color of node n and its two children.
 template <typename K, typename V>
 void Multimap<K, V>::FlipColors(Node *n) {
-  n->color = !n->color;  // flip node color
-  n->left->color = !n->left->color;  // flip left child's color
-  n->right->color = !n->right->color;  // flip right child's color
+  n->color = !n->color;                // Flip color of current node.
+  n->left->color = !n->left->color;    // Flip color of left child.
+  n->right->color = !n->right->color;  // Flip color of right child.
 }
 
-// Performs a right rotation on the subtree rooted
-// at the given node reference
+// Performs a right rotation on the subtree rooted at prt.
 template <typename K, typename V>
 void Multimap<K, V>::RotateRight(std::unique_ptr<Node> &prt) {
-  std::unique_ptr<Node> chd = std::move(prt->left);  // move left child
-  // assign right child of left node as left child
-  prt->left = std::move(chd->right);
-  chd->color = prt->color;  // copy parent's color to child
-  prt->color = RED;  // set parent color to red
-  chd->right = std::move(prt);  // rotate parent's pointer
-  prt = std::move(chd);  // update parent pointer
+  std::unique_ptr<Node> chd = std::move(prt->left);  // Temporarily hold left child.
+  prt->left = std::move(chd->right);                 // Assign right subtree of child to prt's left.
+  chd->color = prt->color;                           // Inherit parent's color.
+  prt->color = RED;                                  // Set parent's color to RED.
+  chd->right = std::move(prt);                       // Make original prt the right child.
+  prt = std::move(chd);                              // Update prt to new subtree root.
 }
 
-// Performs a left rotation on the subtree rooted
-// at the given node reference
+// Performs a left rotation on the subtree rooted at prt.
 template <typename K, typename V>
 void Multimap<K, V>::RotateLeft(std::unique_ptr<Node> &prt) {
-  std::unique_ptr<Node> chd = std::move(prt->right);  // move right child
-  // assign left child of right node as right child
-  prt->right = std::move(chd->left);
-  chd->color = prt->color;  // copy parent's color to child
-  prt->color = RED;  // set parent color to red
-  chd->left = std::move(prt);  // rotate parent's pointer
-  prt = std::move(chd);  // update parent pointer
+  std::unique_ptr<Node> chd = std::move(prt->right); // Temporarily hold right child.
+  prt->right = std::move(chd->left);                 // Assign left subtree of child to prt's right.
+  chd->color = prt->color;                           // Inherit parent's color.
+  prt->color = RED;                                  // Set parent's color to RED.
+  chd->left = std::move(prt);                         // Make original prt the left child.
+  prt = std::move(chd);                              // Update prt to new subtree root.
 }
 
-// Fixes up the subtree to maintain red-black tree properties
-// by performing rotations and color flips
+// Fixes up the subtree rooted at n to restore red-black properties.
 template <typename K, typename V>
 void Multimap<K, V>::FixUp(std::unique_ptr<Node> &n) {
-  // rotate left if right child is red and left child is not red
   if (IsRed(n->right.get()) && !IsRed(n->left.get()))
-    RotateLeft(n);
-  // rotate right if left child and its left child are red
+    RotateLeft(n);                                   // Rotate left if right child is red.
   if (IsRed(n->left.get()) && IsRed(n->left->left.get()))
-    RotateRight(n);
-  // flip colors if both children are red
+    RotateRight(n);                                  // Rotate right if left grandchild is red.
   if (IsRed(n->left.get()) && IsRed(n->right.get()))
-    FlipColors(n.get());
+    FlipColors(n.get());                             // Flip colors if both children are red.
 }
 
-// Moves a red node to the right to prepare for deletion in the right subtree.
+// Moves a red node to the right in preparation for deletion.
 template <typename K, typename V>
 void Multimap<K, V>::MoveRedRight(std::unique_ptr<Node> &n) {
-  FlipColors(n.get());  // flip colors at current node
+  FlipColors(n.get());                               // Flip colors at current node.
   if (IsRed(n->left->left.get())) {
-    RotateRight(n);  // rotate right if left-left grandchild is red
-    FlipColors(n.get());  // flip colors after rotation
+    RotateRight(n);                                  // Rotate right if left-left child is red.
+    FlipColors(n.get());                             // Flip colors after rotation.
   }
 }
 
-// Moves a red node to the left to prepare for deletion in the left subtree
+// Moves a red node to the left in preparation for deletion.
 template <typename K, typename V>
 void Multimap<K, V>::MoveRedLeft(std::unique_ptr<Node> &n) {
-  FlipColors(n.get());  // flip colors at current node
+  FlipColors(n.get());                               // Flip colors at current node.
   if (IsRed(n->right->left.get())) {
-    RotateRight(n->right);  // rotate right on right child
-    RotateLeft(n);  // rotate left on current node
-    FlipColors(n.get());  // flip colors after rotations
+    RotateRight(n->right);                           // Rotate right on right child.
+    RotateLeft(n);                                   // Then rotate left on current node.
+    FlipColors(n.get());                             // Flip colors after rotations.
   }
 }
 
-// Deletes the minimum node in the subtree rooted at the given node reference
+// Deletes the minimum node in the subtree rooted at n.
 template <typename K, typename V>
 void Multimap<K, V>::DeleteMin(std::unique_ptr<Node> &n) {
-  if (!n->left) {
-    n = nullptr;  // remove node if left child is absent
+  if (!n->left) {                                    // If no left child, this is minimum.
+    n = nullptr;                                     // Delete node by setting pointer to null.
     return;
   }
-
   if (!IsRed(n->left.get()) && !IsRed(n->left->left.get()))
-    MoveRedLeft(n);  // move red left if necessary
-
-  DeleteMin(n->left);  // recursively delete minimum in left subtree
-
-  FixUp(n);  // fix up subtree after deletion
+    MoveRedLeft(n);                                  // Adjust subtree if necessary.
+  DeleteMin(n->left);                                // Recurse into left subtree.
+  FixUp(n);                                        // Fix up subtree after deletion.
 }
 
-// Removes a key-value pair corresponding to the given key from the multimap
-// If the key is associated with multiple values
-// only the first value is removed
+// ============================================================================
+// Implementation of Public API: Remove, Insert, Print
+// ============================================================================
+
+// Public Remove: removes one occurrence of the key's value.
+// If the key has multiple values, only the first value is removed.
 template <typename K, typename V>
 void Multimap<K, V>::Remove(const K &key) {
   if (!Contains(key))
-    return;  // do nothing if key is not found
-  Remove(root, key);  // recursively remove key from tree
-  cur_size--;  // decrement size counter
+    return;                                          // If key not found, do nothing.
+  Remove(root, key);                                 // Call recursive removal.
+  cur_size--;                                        // Decrement total count.
   if (root)
-    root->color = BLACK;  // ensure root is always black
+    root->color = BLACK;                             // Ensure root remains black.
 }
 
-// Recursively removes a key-value pair from the subtree
-// and adjusts the tree structure accordingly
+// Recursive Remove: removes one occurrence of key from subtree rooted at n.
 template <typename K, typename V>
 void Multimap<K, V>::Remove(std::unique_ptr<Node> &n, const K &key) {
-  if (!n) return;  // base case: node is null
-
+  if (!n) return;                                    // Base case: if node is null, return.
+  
   if (key < n->key) {
     if (!IsRed(n->left.get()) && !IsRed(n->left->left.get()))
-      MoveRedLeft(n);  // move red left if necessary
-    Remove(n->left, key);  // recursively remove from left subtree
+      MoveRedLeft(n);                                // Adjust left subtree if needed.
+    Remove(n->left, key);                            // Recurse into left subtree.
   } else {
-    if (IsRed(n->left.get())
-        )
-      RotateRight(n);  // rotate right if left child is red
-
-    if (key == n->key && !n->right) {
+    if (IsRed(n->left.get()))
+      RotateRight(n);                                // Rotate right if left child is red.
+    if (key == n->key && !n->right) {                // Found key and no right child.
       if (n->values.size() == 1) {
-        n = nullptr;  // remove node if it has only one value
+        n = nullptr;                                 // Remove node entirely.
       } else {
-        // erase first value if multiple exist
-        n->values.erase(n->values.begin());
+        n->values.erase(n->values.begin());         // Else, remove first value.
       }
       return;
     }
-
     if (!IsRed(n->right.get()) && !IsRed(n->right->left.get()))
-      MoveRedRight(n);  // move red right if necessary
-
+      MoveRedRight(n);                               // Adjust right subtree if needed.
     if (key == n->key) {
       if (n->values.size() == 1) {
-        Node *n_min = Min(n->right.get());  // find min node in right subtree
-        n->key = n_min->key;  // replace key with min key from right subtree
-        n->values = std::move(n_min->values);  // move values from minimum node
-        DeleteMin(n->right);  // delete the minimum node from right subtree
+        Node *n_min = Min(n->right.get());           // Find minimum node in right subtree.
+        n->key = n_min->key;                           // Replace key with successor's key.
+        n->values = std::move(n_min->values);          // Move successor's values.
+        DeleteMin(n->right);                           // Delete successor node.
       } else {
-        // erase first value if multiple exist
-        n->values.erase(n->values.begin());
+        n->values.erase(n->values.begin());          // Remove first value if multiple.
       }
     } else {
-      Remove(n->right, key);  // recursively remove from right subtree
+      Remove(n->right, key);                           // Recurse into right subtree.
     }
   }
-
-  FixUp(n);  // fix up the subtree to maintain tree properties
+  FixUp(n);                                          // Fix subtree to restore properties.
 }
 
-// Inserts a key-value pair into the multimap
-// and ensures red-black tree properties
+// Public Insert: inserts a key-value pair.
 template <typename K, typename V>
 void Multimap<K, V>::Insert(const K &key, const V &value) {
-  Insert(root, key, value);  // recursively insert key-value pair
-  cur_size++;  // increment size counter
+  Insert(root, key, value);                          // Recursively insert into tree.
+  cur_size++;                                        // Increment total count.
   if (root)
-    root->color = BLACK;  // ensure root is always black
+    root->color = BLACK;                             // Ensure root is black.
 }
 
-// Recursively inserts a key-value pair into the subtree.
-// If the key already exists, appends the value to the existing vector.
+// Recursive Insert: inserts a key-value pair into subtree rooted at n.
 template <typename K, typename V>
-void Multimap<K, V>::Insert(std::unique_ptr<Node> &n,
-                            const K &key, const V &value) {
+void Multimap<K, V>::Insert(std::unique_ptr<Node> &n, const K &key, const V &value) {
   if (!n) {
-    // create new node with value vector
+    // Create a new node with key and initialize values vector with the inserted value.
     n = std::unique_ptr<Node>(new Node{key, {value}, RED});
   } else if (key < n->key) {
-    Insert(n->left, key, value);  // insert into left subtree
+    Insert(n->left, key, value);                     // Recurse into left subtree.
   } else if (key > n->key) {
-    Insert(n->right, key, value);  // insert into right subtree
+    Insert(n->right, key, value);                    // Recurse into right subtree.
   } else {
-    n->values.push_back(value);  // append value if key exists
+    n->values.push_back(value);                      // Key exists, append value.
   }
-
-  FixUp(n);  // fix up the subtree to maintain tree properties
+  FixUp(n);                                          // Fix subtree to maintain balance.
 }
 
-// Prints the entire multimap in-order.
+// Public Print: prints the multimap in-order.
 template <typename K, typename V>
 void Multimap<K, V>::Print() {
-  Print(root.get());  // print subtree starting at root
-  std::cout << std::endl;  // print newline at end
+  Print(root.get());                                 // Start at root.
+  std::cout << std::endl;                            // End with a newline.
 }
 
-// Recursively prints the subtree in-order
-// displaying each key and its associated values
+// Recursive Print: in-order traversal to print each node's key and its values.
 template <typename K, typename V>
 void Multimap<K, V>::Print(Node *n) {
-  if (!n) return;  // base case: if node is null, return
-  Print(n->left.get());  // print left subtree
-  // print key and opening bracket for values
-  std::cout << "<" << n->key << ", [";
-  for (size_t i = 0; i < n->values.size(); ++i) {
-    std::cout << n->values[i];  // print value
+  if (!n) return;                                    // Base case: if node is null, do nothing.
+  Print(n->left.get());                              // Print left subtree.
+  // Print current node: key and list of values.
+  std::cout << "<" << n->key << ", [";               // Begin with key and opening bracket.
+  for (size_t i = 0; i < n->values.size(); ++i) {    // Loop through values vector.
+    std::cout << n->values[i];                       // Print individual value.
     if (i != n->values.size() - 1)
-      std::cout << ", ";  // print comma separator in lowercase
+      std::cout << ", ";                             // Comma separator if not last.
   }
-  std::cout << "]> ";  // print closing bracket and angle bracket
-  Print(n->right.get());  // print right subtree
+  std::cout << "]> ";                                // Close the bracket and node.
+  Print(n->right.get());                             // Print right subtree.
 }
 
 #endif  // MULTIMAP_H_
